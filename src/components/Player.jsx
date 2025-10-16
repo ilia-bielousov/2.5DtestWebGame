@@ -1,16 +1,21 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import useKeyboardControls from '../hooks/useKeyboardControls.js';
 
 const PLAYER_SPEED = 6; // units per second
 const PLAYER_HALF_SIZE = 0.5;
+const STOP_DISTANCE = 0.1;
 
-const Player = forwardRef(function Player({ obstacles, targetRef, onMove }, ref) {
+const Player = forwardRef(function Player(
+  { obstacles, targetRef, targetPosition, onMove },
+  ref
+) {
   const meshRef = useRef();
-  const direction = useRef(new THREE.Vector3());
   const position = useRef(new THREE.Vector3(0, PLAYER_HALF_SIZE, 0));
-  const keyboard = useKeyboardControls();
+  const desired = useRef(new THREE.Vector3(0, PLAYER_HALF_SIZE, 0));
+  const toTarget = useMemo(() => new THREE.Vector3(), []);
+  const step = useMemo(() => new THREE.Vector3(), []);
+  const lastDirection = useRef(new THREE.Vector3(0, 0, 1));
 
   useImperativeHandle(ref, () => ({
     get position() {
@@ -19,9 +24,15 @@ const Player = forwardRef(function Player({ obstacles, targetRef, onMove }, ref)
   }));
 
   useEffect(() => {
-    if (meshRef.current) {
-      meshRef.current.position.copy(position.current);
-    }
+    desired.current.copy(targetPosition ?? position.current);
+    desired.current.y = PLAYER_HALF_SIZE;
+  }, [targetPosition]);
+
+  useEffect(() => {
+    if (!meshRef.current) return;
+    meshRef.current.position.copy(position.current);
+    meshRef.current.rotation.set(0, 0, 0);
+
     if (targetRef?.current) {
       targetRef.current.copy(position.current);
     }
@@ -32,7 +43,7 @@ const Player = forwardRef(function Player({ obstacles, targetRef, onMove }, ref)
 
   const isColliding = (x, z) => {
     return obstacles.some(({ position: obsPos, size }) => {
-      const [ox, oy, oz] = obsPos;
+      const [ox, , oz] = obsPos;
       const [sx, , sz] = size;
       const halfX = sx / 2;
       const halfZ = sz / 2;
@@ -44,41 +55,62 @@ const Player = forwardRef(function Player({ obstacles, targetRef, onMove }, ref)
   };
 
   useFrame((_, delta) => {
-    direction.current.set(0, 0, 0);
+    toTarget.subVectors(desired.current, position.current);
+    const distance = Math.hypot(toTarget.x, toTarget.z);
 
-    if (keyboard['KeyW']) direction.current.z -= 1;
-    if (keyboard['KeyS']) direction.current.z += 1;
-    if (keyboard['KeyA']) direction.current.x -= 1;
-    if (keyboard['KeyD']) direction.current.x += 1;
+    if (distance <= STOP_DISTANCE) {
+      // Snap to the goal when close enough so the player fully reaches the target.
+      if (distance > 0) {
+        const prevX = position.current.x;
+        const prevZ = position.current.z;
+        position.current.x = desired.current.x;
+        position.current.z = desired.current.z;
+        meshRef.current.position.copy(position.current);
 
-    if (direction.current.lengthSq() > 0) {
-      direction.current.normalize();
-
-      const moveDistance = PLAYER_SPEED * delta;
-
-      const targetX = position.current.x + direction.current.x * moveDistance;
-      const targetZ = position.current.z + direction.current.z * moveDistance;
-
-      let newX = position.current.x;
-      let newZ = position.current.z;
-
-      if (!isColliding(targetX, position.current.z)) {
-        newX = targetX;
+        if (
+          (prevX !== position.current.x || prevZ !== position.current.z) &&
+          targetRef?.current
+        ) {
+          targetRef.current.copy(position.current);
+        }
+        if (onMove && (prevX !== position.current.x || prevZ !== position.current.z)) {
+          onMove(position.current.clone());
+        }
       }
+      return;
+    }
 
-      if (!isColliding(newX, targetZ)) {
-        newZ = targetZ;
-      }
+    toTarget.set(toTarget.x / distance, 0, toTarget.z / distance);
+    lastDirection.current.copy(toTarget);
 
-      position.current.set(newX, PLAYER_HALF_SIZE, newZ);
-      meshRef.current.position.copy(position.current);
+    const moveDistance = Math.min(PLAYER_SPEED * delta, distance);
+    step.copy(toTarget).multiplyScalar(moveDistance);
 
-      if (targetRef?.current) {
-        targetRef.current.copy(position.current);
-      }
-      if (onMove) {
-        onMove(position.current.clone());
-      }
+    const prevX = position.current.x;
+    const prevZ = position.current.z;
+    let nextX = position.current.x + step.x;
+    let nextZ = position.current.z + step.z;
+
+    if (isColliding(nextX, position.current.z)) {
+      nextX = position.current.x;
+    }
+    if (isColliding(nextX, nextZ)) {
+      nextZ = position.current.z;
+    }
+
+    position.current.set(nextX, PLAYER_HALF_SIZE, nextZ);
+    meshRef.current.position.copy(position.current);
+
+    const facingAngle = Math.atan2(lastDirection.current.x, lastDirection.current.z);
+    meshRef.current.rotation.y = facingAngle;
+
+    const moved = prevX !== position.current.x || prevZ !== position.current.z;
+
+    if (moved && targetRef?.current) {
+      targetRef.current.copy(position.current);
+    }
+    if (onMove && moved) {
+      onMove(position.current.clone());
     }
   });
 
