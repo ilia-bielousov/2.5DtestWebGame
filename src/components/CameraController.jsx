@@ -2,33 +2,31 @@ import { useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
-const CAMERA_RADIUS = 10;
-const CAMERA_TILT = Math.PI / 4; // 45° fixed tilt
-const CAMERA_LERP = 0.12;
+const CAMERA_LERP_STRENGTH = 5;
 
-function CameraController({ targetRef, angle }) {
+function CameraController({ targetRef, angle, tilt, radius }) {
   const { camera } = useThree();
-  const planarRadius = useMemo(
-    () => CAMERA_RADIUS * Math.cos(CAMERA_TILT),
-    []
-  );
-  const height = useMemo(() => CAMERA_RADIUS * Math.sin(CAMERA_TILT), []);
   const desiredPosition = useMemo(() => new THREE.Vector3(), []);
   const lookTarget = useMemo(() => new THREE.Vector3(), []);
 
-  useFrame(() => {
+  useFrame((_, delta) => {
     if (!targetRef?.current) return;
 
-    // Orbit around the player at a constant radius, constrained to the XZ plane.
+    const planarRadius = radius * Math.cos(tilt);
+    const height = radius * Math.sin(tilt);
+
+    // Orbit around the player at a constant radius, constrained to the XZ plane with a clamped tilt.
     desiredPosition.set(
       targetRef.current.x + planarRadius * Math.cos(angle),
       targetRef.current.y + height,
       targetRef.current.z + planarRadius * Math.sin(angle)
     );
 
-    camera.position.lerp(desiredPosition, CAMERA_LERP);
+    // Exponential smoothing keeps the follow motion responsive without abrupt acceleration.
+    const lerpFactor = 1 - Math.exp(-CAMERA_LERP_STRENGTH * delta);
+    camera.position.lerp(desiredPosition, lerpFactor);
 
-    lookTarget.copy(targetRef.current);
+    lookTarget.lerp(targetRef.current, lerpFactor);
     camera.lookAt(lookTarget);
   });
 

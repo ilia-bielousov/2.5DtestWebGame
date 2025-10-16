@@ -3,19 +3,18 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { StatsGl } from '@react-three/drei';
 import * as THREE from 'three';
 import Player from './components/Player.jsx';
-import Obstacle from './components/Obstacle.jsx';
 import CameraController from './components/CameraController.jsx';
 
-const obstacleData = [
-  { position: [0, 0.5, -5], size: [2, 1, 2], color: '#ef4444' },
-  { position: [-4, 0.5, 2], size: [1.5, 1, 1.5], color: '#22c55e' },
-  { position: [5, 0.5, 4], size: [3, 1, 1], color: '#3b82f6' },
-  { position: [2, 0.5, 6], size: [1, 1, 3], color: '#f97316' },
-];
-
 const PLAYER_HEIGHT = 0.5;
-const INITIAL_CAMERA_ANGLE = Math.PI / 4;
+const INITIAL_CAMERA_YAW = Math.PI / 4;
+const INITIAL_CAMERA_TILT = Math.PI / 4;
+const CAMERA_TILT_MIN = THREE.MathUtils.degToRad(25);
+const CAMERA_TILT_MAX = THREE.MathUtils.degToRad(70);
 const ROTATION_SPEED = 0.008;
+const TILT_SPEED = 0.006;
+const INITIAL_RADIUS = 10;
+const MIN_RADIUS = 6;
+const MAX_RADIUS = 18;
 
 function GameScene({ onPlayerMove = () => {} }) {
   const playerRef = useRef();
@@ -23,14 +22,17 @@ function GameScene({ onPlayerMove = () => {} }) {
   const [targetPosition, setTargetPosition] = useState(
     () => new THREE.Vector3(0, PLAYER_HEIGHT, 0)
   );
-  const [cameraAngle, setCameraAngle] = useState(INITIAL_CAMERA_ANGLE);
+  const [cameraAngle, setCameraAngle] = useState(INITIAL_CAMERA_YAW);
+  const [cameraTilt, setCameraTilt] = useState(INITIAL_CAMERA_TILT);
+  const [cameraRadius, setCameraRadius] = useState(INITIAL_RADIUS);
+  const emptyObstacles = useMemo(() => [], []);
   const rotationState = useRef({
     active: false,
     startX: 0,
-    startAngle: INITIAL_CAMERA_ANGLE,
+    startY: 0,
+    startAngle: INITIAL_CAMERA_YAW,
+    startTilt: INITIAL_CAMERA_TILT,
   });
-
-  const obstacles = useMemo(() => obstacleData, []);
 
   useEffect(() => {
     const releaseRotation = () => {
@@ -55,15 +57,26 @@ function GameScene({ onPlayerMove = () => {} }) {
       }
       rotationState.current.active = true;
       rotationState.current.startX = event.nativeEvent.clientX;
+      rotationState.current.startY = event.nativeEvent.clientY;
       rotationState.current.startAngle = cameraAngle;
+      rotationState.current.startTilt = cameraTilt;
     },
-    [cameraAngle]
+    [cameraAngle, cameraTilt]
   );
 
   const handleCanvasPointerMove = useCallback((event) => {
     if (!rotationState.current.active) return;
     const deltaX = event.nativeEvent.clientX - rotationState.current.startX;
+    const deltaY = event.nativeEvent.clientY - rotationState.current.startY;
+    // Horizontal drags yaw the camera; vertical drags adjust the tilt within a safe range.
     setCameraAngle(rotationState.current.startAngle + deltaX * ROTATION_SPEED);
+    setCameraTilt(
+      THREE.MathUtils.clamp(
+        rotationState.current.startTilt + deltaY * TILT_SPEED,
+        CAMERA_TILT_MIN,
+        CAMERA_TILT_MAX
+      )
+    );
   }, []);
 
   const handleCanvasPointerUp = useCallback((event) => {
@@ -76,6 +89,18 @@ function GameScene({ onPlayerMove = () => {} }) {
     rotationState.current.active = false;
   }, []);
 
+  const handleCanvasWheel = useCallback((event) => {
+    event.preventDefault();
+    // Mouse wheel zooms the orbital radius while keeping it within comfortable limits.
+    setCameraRadius((current) =>
+      THREE.MathUtils.clamp(
+        current + event.deltaY * 0.01,
+        MIN_RADIUS,
+        MAX_RADIUS
+      )
+    );
+  }, []);
+
   return (
     <Canvas
       shadows
@@ -85,6 +110,7 @@ function GameScene({ onPlayerMove = () => {} }) {
       onPointerMove={handleCanvasPointerMove}
       onPointerUp={handleCanvasPointerUp}
       onPointerOut={handleCanvasPointerLeave}
+      onWheel={handleCanvasWheel}
       onCreated={({ gl }) => {
         // Prevent the default context menu when orbiting with the right mouse button.
         gl.domElement.oncontextmenu = (event) => event.preventDefault();
@@ -102,13 +128,9 @@ function GameScene({ onPlayerMove = () => {} }) {
 
         <Ground onSelect={handleDestinationSelect} />
 
-        {obstacles.map((props, index) => (
-          <Obstacle key={`obstacle-${index}`} {...props} />
-        ))}
-
         <Player
           ref={playerRef}
-          obstacles={obstacles}
+          obstacles={emptyObstacles}
           targetRef={targetRef}
           targetPosition={targetPosition}
           onMove={(position) => {
@@ -117,7 +139,12 @@ function GameScene({ onPlayerMove = () => {} }) {
           }}
         />
 
-        <CameraController targetRef={targetRef} angle={cameraAngle} />
+        <CameraController
+          targetRef={targetRef}
+          angle={cameraAngle}
+          tilt={cameraTilt}
+          radius={cameraRadius}
+        />
 
         <StatsGl />
       </Suspense>
